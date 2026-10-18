@@ -16,20 +16,34 @@ on:
         default: 'ubuntu2604'
     secrets:
       R2_ACCESS_KEY_ID:
-        required: true
+        required: false
       R2_SECRET_ACCESS_KEY:
-        required: true
+        required: false
       R2_ENDPOINT:
-        required: true
+        required: false
       R2_BUCKET:
-        required: true
+        required: false
 
 jobs:
   matrix:
     runs-on: self-hosted
     outputs:
       distros: ${{ steps.set.outputs.distros }}
+      has_r2: ${{ steps.r2.outputs.has_r2 }}
     steps:
+      # R2 upload + the R2-linked release are optional: forks without the
+      # R2 secrets still get the image as a GitHub Actions artifact.
+      - id: r2
+        env:
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          if [ -n "$R2_BUCKET" ]; then
+            echo "has_r2=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_r2=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::R2 secrets not set, skipping R2 upload and release (image is available as a workflow artifact)"
+          fi
+
       - id: set
         run: |
           INPUT="${{ inputs.distro || 'ubuntu2604' }}"
@@ -115,8 +129,16 @@ jobs:
           xz -T0 -4 -c image/output/ps5-${{ matrix.distro }}.img \
             > image/output/ps5-${{ matrix.distro }}.img.xz
 
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ps5-${{ matrix.distro }}.img.xz
+          path: image/output/ps5-${{ matrix.distro }}.img.xz
+          compression-level: 0
+          if-no-files-found: error
+
       - name: Upload to R2
-        if: github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
+        if: needs.matrix.outputs.has_r2 == 'true' && github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
         env:
           RCLONE_CONFIG_R2_TYPE: s3
           RCLONE_CONFIG_R2_PROVIDER: Cloudflare
@@ -145,9 +167,9 @@ jobs:
           retention-days: 1
 
   release:
-    needs: build
+    needs: [matrix, build]
     runs-on: self-hosted
-    if: github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
+    if: needs.matrix.outputs.has_r2 == 'true' && github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
     permissions:
       contents: write
     steps:
