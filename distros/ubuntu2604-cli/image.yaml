@@ -132,13 +132,15 @@ actions:
     printf 'PermitRootLogin yes\nPasswordAuthentication yes\n' > /etc/ssh/sshd_config.d/00-ps5-root-login.conf
     systemctl enable ssh
 
-    # Don't ship the same SSH host keys in every image — regenerate on first boot
+    # Don't ship the same SSH host keys in every image — regenerate on first boot.
+    # Only order against ssh.service: ssh.socket starts before basic.target, so
+    # ordering a regular service before it creates a cycle and systemd drops a job.
     rm -f /etc/ssh/ssh_host_*
     cat > /etc/systemd/system/ssh-hostkeys.service <<'EOF'
     [Unit]
     Description=Generate SSH host keys
     ConditionPathExists=!/etc/ssh/ssh_host_ed25519_key
-    Before=ssh.service ssh.socket
+    Before=ssh.service
 
     [Service]
     Type=oneshot
@@ -147,6 +149,9 @@ actions:
     [Install]
     WantedBy=multi-user.target
     EOF
+    mkdir -p /etc/systemd/system/ssh.service.d
+    printf '[Unit]\nWants=ssh-hostkeys.service\nAfter=ssh-hostkeys.service\n' \
+      > /etc/systemd/system/ssh.service.d/10-hostkeys.conf
     systemctl enable ssh-hostkeys.service
 
     # Let NetworkManager manage all interfaces (ethernet DHCP out of the box)
