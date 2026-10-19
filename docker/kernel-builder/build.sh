@@ -6,6 +6,16 @@ set -e
 # Clean host-built tool artifacts that may reference wrong include paths
 make -C tools/objtool clean 2>/dev/null || true
 
+# Netfilter bits needed by Kubernetes (kube-proxy iptables mode, k3s network
+# policy). The upstream PS5 config enables NETFILTER_NETLINK_ACCT but not
+# XT_MATCH_NFACCT, so kube-proxy emits nfacct rules the kernel rejects.
+./scripts/config \
+    -m NETFILTER_XT_MATCH_NFACCT -m NETFILTER_XT_MATCH_STATISTIC \
+    -m NETFILTER_XT_MATCH_RECENT -m NETFILTER_XT_SET \
+    -m IP_SET -m IP_SET_HASH_IP -m IP_SET_HASH_IPPORT -m IP_SET_HASH_IPPORTIP \
+    -m IP_SET_HASH_IPPORTNET -m IP_SET_HASH_NET -m IP_SET_HASH_NETPORT \
+    -m IP_SET_BITMAP_PORT -m IP_SET_LIST_SET
+
 make olddefconfig
 make -j"$(nproc)" bzImage modules
 
