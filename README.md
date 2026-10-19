@@ -101,7 +101,7 @@ All verbose output goes to `build.log`. The terminal shows a spinner with live p
 | Distro | Desktop | Kernel format | Init |
 |--------|---------|---------------|------|
 | Ubuntu 26.04 (Resolute) | GNOME | `.deb` | systemd |
-| Ubuntu 26.04 headless (`ubuntu2604-cli`) | none (TTY only, SSH enabled, login `root`/`root`) | `.deb` | systemd |
+| Ubuntu 26.04 headless (`ubuntu2604-cli`) | none (TTY only, SSH enabled, login `root`/`root`, Mesa Vulkan/GL/VA-API) | `.deb` | systemd |
 | Arch | Sway | `.pkg.tar.zst` | systemd |
 | CachyOS | Gamescope + Steam Big Picture (Arch + `[cachyos]` repo, no v3 migration in image build) | `.pkg.tar.zst` | systemd |
 

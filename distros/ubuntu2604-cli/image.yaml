@@ -45,6 +45,15 @@ packages:
     - bluez
     - bluez-tools
     - linux-firmware
+    # GPU userspace (no desktop): Vulkan via RADV, GL/EGL, VA-API + test tools
+    - mesa-vulkan-drivers
+    - libgl1-mesa-dri
+    - libegl1
+    - mesa-va-drivers
+    - vulkan-tools
+    - mesa-utils
+    - vainfo
+    - radeontop
     - initramfs-tools
     - kmod
     - dialog
