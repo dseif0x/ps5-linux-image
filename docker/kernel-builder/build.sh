@@ -16,7 +16,22 @@ make -C tools/objtool clean 2>/dev/null || true
     -m IP_SET_HASH_IPPORTNET -m IP_SET_HASH_NET -m IP_SET_HASH_NETPORT \
     -m IP_SET_BITMAP_PORT -m IP_SET_LIST_SET
 
+# Longhorn: volumes attach through the iSCSI initiator (iscsi_tcp), encrypted
+# volumes need dm_crypt, and RWX volumes / backups mount NFSv4.
+# Only options that are unset get added, so built-ins (=y) stay built in.
+for opt in SCSI_LOWLEVEL MD; do
+    ./scripts/config --state "$opt" | grep -q '^y$' || ./scripts/config -e "$opt"
+done
+for opt in SCSI_ISCSI_ATTRS ISCSI_TCP BLK_DEV_DM DM_CRYPT NFS_FS; do
+    ./scripts/config --state "$opt" | grep -Eq '^(y|m)$' || ./scripts/config -m "$opt"
+done
+./scripts/config -e NFS_V4 -e NFS_V4_1 -e NFS_V4_2
+
 make olddefconfig
+# Fail early instead of shipping a kernel Longhorn can't use.
+for opt in ISCSI_TCP DM_CRYPT NFS_V4; do
+    grep -Eq "^CONFIG_${opt}=(y|m)" .config || { echo "CONFIG_${opt} missing after olddefconfig" >&2; exit 1; }
+done
 make -j"$(nproc)" bzImage modules
 
 # Stage all artifacts so downstream packagers don't need to run make
