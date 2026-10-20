@@ -1,0 +1,15 @@
+diff --git a/drivers/gpu/drm/amd/amdgpu/nv.c b/drivers/gpu/drm/amd/amdgpu/nv.c
+index 72edf53..674c4ae 100644
+--- a/drivers/gpu/drm/amd/amdgpu/nv.c
++++ b/drivers/gpu/drm/amd/amdgpu/nv.c
+@@ -265,6 +265,10 @@ static int nv_query_video_codecs(struct amdgpu_device *adev, bool encode,
+ 		return 0;
+ 	case IP_VERSION(2, 0, 0):
+ 	case IP_VERSION(2, 0, 2):
++#ifdef CONFIG_X86_PS5
++	/* Oberon's VCN 2.0 (Cyan Skillfish IP version), enabled by the PS5 patches. */
++	case IP_VERSION(2, 0, 3):
++#endif
+ 		if (encode)
+ 			*codecs = &nv_video_codecs_encode;
+ 		else

@@ -289,6 +289,11 @@ else
             for p in "${patches[@]}"; do
                 echo "Applying $p"
                 git -C "'"$LINUX_TMP_DIR"'" apply --exclude=Makefile "$p"
+            done
+            # Our own fixes on top of ps5-linux-patches (kernel-patches/).
+            for p in "'"$SCRIPT_DIR"'"/kernel-patches/*.patch; do
+                echo "Applying $p"
+                git -C "'"$LINUX_TMP_DIR"'" apply "$p"
             done'
 
         run_stage "Copy kernel config" \
