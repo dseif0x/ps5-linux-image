@@ -8,7 +8,7 @@ on:
         description: 'Distribution'
         default: 'ubuntu2604'
         type: choice
-        options: [all, ubuntu2604, arch, cachyos, fedora, proxmox, debian, bazzite, bazzite-deck, steamos]
+        options: [all, ubuntu2604, ubuntu2604-cli, arch, cachyos, fedora, proxmox, debian, bazzite, bazzite-deck, steamos]
   workflow_call:
     inputs:
       distro:
@@ -16,33 +16,48 @@ on:
         default: 'ubuntu2604'
     secrets:
       R2_ACCESS_KEY_ID:
-        required: true
+        required: false
       R2_SECRET_ACCESS_KEY:
-        required: true
+        required: false
       R2_ENDPOINT:
-        required: true
+        required: false
       R2_BUCKET:
-        required: true
+        required: false
 
 jobs:
   matrix:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     outputs:
       distros: ${{ steps.set.outputs.distros }}
+      has_r2: ${{ steps.r2.outputs.has_r2 }}
     steps:
+      # R2 upload + the R2-linked release are optional: forks without the
+      # R2 secrets still get the image as a GitHub Actions artifact.
+      - id: r2
+        env:
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          if [ -n "$R2_BUCKET" ]; then
+            echo "has_r2=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_r2=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::R2 secrets not set, skipping R2 upload and release (image is available as a workflow artifact)"
+          fi
+
       - id: set
         run: |
           INPUT="${{ inputs.distro || 'ubuntu2604' }}"
           if [ "$INPUT" = "all" ]; then
-            echo 'distros=["ubuntu2604","arch","cachyos","fedora","proxmox","debian","bazzite","bazzite-deck","steamos"]' >> "$GITHUB_OUTPUT"
+            echo 'distros=["ubuntu2604","ubuntu2604-cli","arch","cachyos","fedora","proxmox","debian","bazzite","bazzite-deck","steamos"]' >> "$GITHUB_OUTPUT"
           else
             echo "distros=[\"$INPUT\"]" >> "$GITHUB_OUTPUT"
           fi
 
   build:
     needs: matrix
-    runs-on: self-hosted
-    timeout-minutes: 720
+    runs-on: ubuntu-latest
+    # GitHub-hosted runners cap a job at 6 hours
+    timeout-minutes: 360
     permissions:
       contents: write
 
@@ -53,9 +68,41 @@ jobs:
         distro: ${{ fromJson(needs.matrix.outputs.distros) }}
 
     env:
-      CCACHE_DIR: /home/opc/ccache
+      CCACHE_DIR: ${{ github.workspace }}/ccache
 
     steps:
+      - name: Free disk space
+        run: |
+          # Hosted runners have limited free disk; drop preinstalled toolchains we
+          # don't use (kernel build + rootfs + image need ~30-40 GB).
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache /usr/share/swift \
+            /usr/local/share/powershell /usr/local/share/chromium \
+            /usr/local/lib/node_modules /opt/microsoft /opt/google
+          sudo docker image prune -af || true
+          sudo swapoff -a && sudo rm -f /mnt/swapfile /swapfile || true
+          df -h /
+
+      - name: Install rclone
+        if: needs.matrix.outputs.has_r2 == 'true'
+        run: sudo apt-get update && sudo apt-get install -y rclone
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ccache
+          key: ccache-${{ matrix.distro }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ matrix.distro }}-
+            ccache-
+
+      - name: Configure ccache
+        run: |
+          mkdir -p "$CCACHE_DIR"
+          # Keep each entry small so all distros fit in the 10 GB repo cache quota
+          printf 'max_size = 1G\ncompression = true\n' > "$CCACHE_DIR/ccache.conf"
+
       - name: Clean image workspace
         run: |
           set -euo pipefail
@@ -109,14 +156,24 @@ jobs:
         run: |
           ls -lh image/output/*.img
           sha256sum image/output/*.img
+          df -h /
 
       - name: Compress image
         run: |
           xz -T0 -4 -c image/output/ps5-${{ matrix.distro }}.img \
             > image/output/ps5-${{ matrix.distro }}.img.xz
+          sudo rm -f image/output/ps5-${{ matrix.distro }}.img
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ps5-${{ matrix.distro }}.img.xz
+          path: image/output/ps5-${{ matrix.distro }}.img.xz
+          compression-level: 0
+          if-no-files-found: error
 
       - name: Upload to R2
-        if: github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
+        if: needs.matrix.outputs.has_r2 == 'true' && github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
         env:
           RCLONE_CONFIG_R2_TYPE: s3
           RCLONE_CONFIG_R2_PROVIDER: Cloudflare
@@ -145,9 +202,9 @@ jobs:
           retention-days: 1
 
   release:
-    needs: build
-    runs-on: self-hosted
-    if: github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
+    needs: [matrix, build]
+    runs-on: ubuntu-latest
+    if: needs.matrix.outputs.has_r2 == 'true' && github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
     permissions:
       contents: write
     steps:
@@ -181,6 +238,7 @@ jobs:
             const R2 = 'https://pub-561df4012f1a46fbbdf618d5cc5941f6.r2.dev';
             const ALL_DISTROS = [
               { key: 'ubuntu2604',   label: 'Ubuntu 26.04',         file: 'ps5-ubuntu2604.img.xz' },
+              { key: 'ubuntu2604-cli', label: 'Ubuntu 26.04 (headless)', file: 'ps5-ubuntu2604-cli.img.xz' },
               { key: 'arch',         label: 'Arch',                 file: 'ps5-arch.img.xz' },
               { key: 'cachyos',      label: 'CachyOS',              file: 'ps5-cachyos.img.xz' },
               { key: 'fedora',       label: 'Fedora 44',            file: 'ps5-fedora.img.xz' },

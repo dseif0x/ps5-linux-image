@@ -9,7 +9,9 @@ KERNEL_SRC=""
 CLEAN=false
 IMG_SIZE=12000
 KERNEL_ONLY=false
-PATCHES_REF="kernel-7.1.7-56922cf"
+# 753c793 (ps5-linux-patches main, 2026-10-09): Linux 7.2.3 with VCN 2.0
+# (hardware H.264/HEVC encode/decode). No kernel-7.2.x release exists yet.
+PATCHES_REF="753c7936dcb079bfeaaa0bb19dfc495744266500"
 
 MULTI_DISTROS="ubuntu2604 arch cachyos"
 
@@ -17,13 +19,17 @@ usage() {
     echo "Usage: $0 [--distro <distro>] [--kernel <path>] [--img-size <MB>] [--clean]"
     echo ""
     echo "Options:"
-    echo "  --distro     Distribution to build: ubuntu2604, arch, cachyos, fedora, proxmox, debian, bazzite, bazzite-deck, batocera, all (default: ubuntu2604)"
+    echo "  --distro     Distribution to build: ubuntu2604, ubuntu2604-cli, arch, cachyos, fedora, proxmox, debian, bazzite, bazzite-deck, batocera, all (default: ubuntu2604)"
     echo "  --kernel     Path to kernel source directory (default: auto-clone to work/linux/)"
     echo "  --img-size   Disk image size in MB (default: 12000, 32000 for --distro all)"
     echo "  --clean      Remove all cached build artifacts and start from scratch"
     echo "  --clean-only Remove all cached build artifacts and exit"
     echo "  --kernel-only  Build and package the kernel only, then exit"
     echo "  --patches-ref  Branch, tag, or commit SHA for patches (default: v1.2)"
+    echo ""
+    echo "Environment:"
+    echo "  PS5_VCN_FIRMWARE=navi10  Build in AMD's current Navi10 VCN firmware with the"
+    echo "                           PS5 patches instead of ps5-linux-patches' older one"
     exit 1
 }
 
@@ -287,10 +293,35 @@ else
             for p in "${patches[@]}"; do
                 echo "Applying $p"
                 git -C "'"$LINUX_TMP_DIR"'" apply --exclude=Makefile "$p"
+            done
+            # Our own fixes on top of ps5-linux-patches (kernel-patches/).
+            for p in "'"$SCRIPT_DIR"'"/kernel-patches/*.patch; do
+                echo "Applying $p"
+                git -C "'"$LINUX_TMP_DIR"'" apply "$p"
             done'
 
         run_stage "Copy kernel config" \
             cp "$PATCHES_DIR/.config" "$LINUX_TMP_DIR/.config"
+
+        # The patches' .config builds firmware into the kernel (VCN:
+        # amdgpu/ps5_vcn.bin) from ../ps5-linux-patches/firmware, a path
+        # the kernel-builder container (which only mounts the kernel tree
+        # at /src) cannot see. Ship the blobs inside the tree instead.
+        if [ -d "$PATCHES_DIR/firmware" ]; then
+            run_stage "Copy PS5 firmware into kernel tree" bash -c '
+                set -e
+                cp -r "'"$PATCHES_DIR"'/firmware" "'"$LINUX_TMP_DIR"'/ps5-firmware"
+                # Opt-in: newer Navi10 VCN firmware with the PS5 patches.
+                if [ "'"${PS5_VCN_FIRMWARE:-}"'" = navi10 ]; then
+                    "'"$SCRIPT_DIR"'/kernel-patches/ps5-vcn-navi10.sh" \
+                        "'"$LINUX_TMP_DIR"'/ps5-firmware/amdgpu/ps5_vcn.bin"
+                fi
+                cfg="'"$LINUX_TMP_DIR"'/.config"
+                # No sed -i: BSD sed (macOS hosts) takes a suffix argument.
+                sed "s|^CONFIG_EXTRA_FIRMWARE_DIR=.*|CONFIG_EXTRA_FIRMWARE_DIR=\"ps5-firmware\"|" "$cfg" > "$cfg.new"
+                mv "$cfg.new" "$cfg"
+                grep -q "^CONFIG_EXTRA_FIRMWARE_DIR=\"ps5-firmware\"" "$cfg"'
+        fi
 
         mv "$LINUX_TMP_DIR" "$LINUX_DEFAULT_DIR"
         KERNEL_SRC="$LINUX_DEFAULT_DIR"

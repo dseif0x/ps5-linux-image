@@ -6,7 +6,32 @@ set -e
 # Clean host-built tool artifacts that may reference wrong include paths
 make -C tools/objtool clean 2>/dev/null || true
 
+# Netfilter bits needed by Kubernetes (kube-proxy iptables mode, k3s network
+# policy). The upstream PS5 config enables NETFILTER_NETLINK_ACCT but not
+# XT_MATCH_NFACCT, so kube-proxy emits nfacct rules the kernel rejects.
+./scripts/config \
+    -m NETFILTER_XT_MATCH_NFACCT -m NETFILTER_XT_MATCH_STATISTIC \
+    -m NETFILTER_XT_MATCH_RECENT -m NETFILTER_XT_SET \
+    -m IP_SET -m IP_SET_HASH_IP -m IP_SET_HASH_IPPORT -m IP_SET_HASH_IPPORTIP \
+    -m IP_SET_HASH_IPPORTNET -m IP_SET_HASH_NET -m IP_SET_HASH_NETPORT \
+    -m IP_SET_BITMAP_PORT -m IP_SET_LIST_SET
+
+# Longhorn: volumes attach through the iSCSI initiator (iscsi_tcp), encrypted
+# volumes need dm_crypt, and RWX volumes / backups mount NFSv4.
+# Only options that are unset get added, so built-ins (=y) stay built in.
+for opt in SCSI_LOWLEVEL MD; do
+    ./scripts/config --state "$opt" | grep -q '^y$' || ./scripts/config -e "$opt"
+done
+for opt in SCSI_ISCSI_ATTRS ISCSI_TCP BLK_DEV_DM DM_CRYPT NFS_FS; do
+    ./scripts/config --state "$opt" | grep -Eq '^(y|m)$' || ./scripts/config -m "$opt"
+done
+./scripts/config -e NFS_V4 -e NFS_V4_1 -e NFS_V4_2
+
 make olddefconfig
+# Fail early instead of shipping a kernel Longhorn can't use.
+for opt in ISCSI_TCP DM_CRYPT NFS_V4; do
+    grep -Eq "^CONFIG_${opt}=(y|m)" .config || { echo "CONFIG_${opt} missing after olddefconfig" >&2; exit 1; }
+done
 make -j"$(nproc)" bzImage modules
 
 # Stage all artifacts so downstream packagers don't need to run make
@@ -51,9 +76,21 @@ rm -rf "$PS5_MW" "$NXP_MW"
 git clone "$MWIFIEX_REPO" "$PS5_MW"
 git -C "$PS5_MW" checkout "$MWIFIEX_REF" 2>/dev/null || true
 git clone --depth 1 --branch "$MWIFIEX_NXP_REF" "$MWIFIEX_NXP_REPO" "$NXP_MW"
-git -C "$NXP_MW" apply "$PS5_MW/ps5-iw620.patch"
-git -C "$NXP_MW" apply "$PS5_MW/ps5-iw620-cmd-timeout-recover.patch"
-git -C "$NXP_MW" apply "$PS5_MW/ps5-iw620-kernel71-compat.patch"
+# Same patch stack and order as ps5-linux-mwifiex's install.sh. The
+# kernel72 compat patch (strncpy -> strscpy, remain_on_channel's new
+# mac_addr argument) goes on top of kernel71 and only for 7.2+ kernels;
+# rtnl/he/tx are generated against the post-compat tree.
+mw_patches="ps5-iw620 ps5-iw620-cmd-timeout-recover ps5-iw620-kernel71-compat"
+KMAJ=${KVER%%.*}
+KMIN=${KVER#*.}; KMIN=${KMIN%%.*}
+if [ "$KMAJ" -gt 7 ] || { [ "$KMAJ" -eq 7 ] && [ "$KMIN" -ge 2 ]; }; then
+    mw_patches="$mw_patches ps5-iw620-kernel72-compat"
+fi
+mw_patches="$mw_patches ps5-iw620-rtnl-bounded-wait ps5-iw620-he ps5-iw620-tx-min128 ps5-iw620-tx-priority"
+for p in $mw_patches; do
+    echo "Applying $p.patch"
+    git -C "$NXP_MW" apply "$PS5_MW/$p.patch"
+done
 
 # Build against the kernel source we just built (out-of-tree build needs
 # the in-tree build dir, not just headers; same as install-extmod-build).

@@ -1,0 +1,195 @@
+image:
+  name: ps5-ubuntu2604-cli
+  distribution: ubuntu
+  release: resolute
+  description: Ubuntu Resolute headless (TTY only, SSH enabled)
+  architecture: x86_64
+
+source:
+  downloader: debootstrap
+  url: http://archive.ubuntu.com/ubuntu
+  variant: minbase
+  keyserver: keyserver.ubuntu.com
+  keys:
+  - 0x790BC7277767219C42C86F933B4FE6ACC0B21F32
+  - 0xf6ecb3762474eda9d21b7022871920d1991bc93c
+
+packages:
+  manager: apt
+  update: true
+  cleanup: true
+
+  repositories:
+  - name: sources.list
+    url: |-
+      deb http://archive.ubuntu.com/ubuntu {{ image.release }} main restricted universe multiverse
+      deb http://archive.ubuntu.com/ubuntu {{ image.release }}-updates main restricted universe multiverse
+      deb http://security.ubuntu.com/ubuntu {{ image.release }}-security main restricted universe multiverse
+    architectures:
+    - amd64
+
+  sets:
+  - packages:
+    # Base system (no desktop)
+    - ubuntu-minimal
+    - ubuntu-standard
+    - systemd-resolved
+    - openssh-server
+    - network-manager
+    - iputils-ping
+    - iw
+    - wpasupplicant
+    - wireless-regdb
+    - rfkill
+    - bluetooth
+    - bluez
+    - bluez-tools
+    - linux-firmware
+    # GPU userspace (no desktop): Vulkan via RADV, GL/EGL, VA-API + test tools
+    - mesa-vulkan-drivers
+    - libgl1-mesa-dri
+    - libegl1
+    - mesa-va-drivers
+    - vulkan-tools
+    - mesa-utils
+    - vainfo
+    - radeontop
+    - initramfs-tools
+    - kmod
+    - dialog
+    - sudo
+    - nano
+    - vim
+    - tmux
+    - htop
+    - curl
+    - wget
+    - ca-certificates
+    - cloud-guest-utils
+    - kexec-tools
+    - systemd-zram-generator
+    - git
+    - build-essential
+    - flex
+    - gawk
+    - bison
+    - dwarves
+    - libelf-dev
+    - libssl-dev
+    - libncurses-dev
+    action: install
+
+files:
+- path: /etc/hostname
+  generator: hostname
+
+- path: /etc/hosts
+  generator: hosts
+
+- path: /etc/machine-id
+  generator: dump
+
+- path: /etc/NetworkManager/conf.d/dns.conf
+  generator: copy
+  source: /tmp/build-staging/nm-dns.conf
+
+- path: /etc/kernel/postinst.d/zz-update-boot
+  generator: copy
+  source: /tmp/build-staging/zz-update-boot
+  mode: "0755"
+
+- path: /etc/fstab
+  generator: copy
+  source: /tmp/build-staging/fstab
+
+- path: /usr/local/sbin/grow-rootfs
+  generator: copy
+  source: /tmp/build-staging/grow-rootfs
+  mode: "0755"
+
+- path: /etc/systemd/system/grow-rootfs.service
+  generator: copy
+  source: /tmp/build-staging/grow-rootfs.service
+
+- path: /opt/debs/
+  generator: copy
+  source: /tmp/build-staging/debs
+
+actions:
+- trigger: post-unpack
+  action: |-
+    #!/bin/bash
+    set -eux
+    # Clear stale apt lists to avoid InRelease split errors after debootstrap
+    rm -f /var/lib/apt/lists/*InRelease /var/lib/apt/lists/*Release /var/lib/apt/lists/*Packages* || true
+    # Retry up to 10 times on transient 429/network errors
+    echo 'Acquire::Retries "10";' > /etc/apt/apt.conf.d/80retry
+    apt-get update
+
+- trigger: post-packages
+  action: |-
+    #!/bin/bash
+    set -eux
+
+    # Default credentials: root/root
+    echo "root:root" | chpasswd
+
+    # SSH — root login with password allowed (public default credentials!)
+    sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/'               /etc/ssh/sshd_config
+    sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+    mkdir -p /etc/ssh/sshd_config.d
+    printf 'PermitRootLogin yes\nPasswordAuthentication yes\n' > /etc/ssh/sshd_config.d/00-ps5-root-login.conf
+    systemctl enable ssh
+
+    # Don't ship the same SSH host keys in every image — regenerate on first boot.
+    # Only order against ssh.service: ssh.socket starts before basic.target, so
+    # ordering a regular service before it creates a cycle and systemd drops a job.
+    rm -f /etc/ssh/ssh_host_*
+    cat > /etc/systemd/system/ssh-hostkeys.service <<'EOF'
+    [Unit]
+    Description=Generate SSH host keys
+    ConditionPathExists=!/etc/ssh/ssh_host_ed25519_key
+    Before=ssh.service
+
+    [Service]
+    Type=oneshot
+    ExecStart=/usr/bin/ssh-keygen -A
+
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+    mkdir -p /etc/systemd/system/ssh.service.d
+    printf '[Unit]\nWants=ssh-hostkeys.service\nAfter=ssh-hostkeys.service\n' \
+      > /etc/systemd/system/ssh.service.d/10-hostkeys.conf
+    systemctl enable ssh-hostkeys.service
+
+    # Let NetworkManager manage all interfaces (ethernet DHCP out of the box)
+    mkdir -p /etc/netplan
+    printf 'network:\n  version: 2\n  renderer: NetworkManager\n' > /etc/netplan/01-network-manager-all.yaml
+    chmod 600 /etc/netplan/01-network-manager-all.yaml
+
+    # Headless: boot to text console only
+    systemctl set-default multi-user.target
+
+    # zram swap: half of RAM, zstd compressed
+    printf '[zram0]\nzram-size = ram / 2\ncompression-algorithm = zstd\n' > /etc/systemd/zram-generator.conf
+
+- trigger: post-files
+  action: |-
+    #!/bin/bash
+    set -eux
+    systemctl enable grow-rootfs.service
+    systemctl enable systemd-resolved
+    systemctl enable NetworkManager
+    systemctl enable bluetooth.service
+    mkdir -p /boot/efi
+    # Disable kdump postinst hook — it fails in chroot (can't resolve root device)
+    rm -f /etc/kernel/postinst.d/kdump-tools
+    dpkg -i /opt/debs/*.deb
+    rm -rf /opt/debs
+    KVER=$(ls -1t /lib/modules | head -1)
+    update-initramfs -c -k "$KVER"
+    /etc/kernel/postinst.d/zz-update-boot "$KVER"
+
+mappings:
+  architecture_map: debian

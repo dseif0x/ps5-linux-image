@@ -5,7 +5,7 @@ on:
 
 jobs:
   matrix:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     outputs:
       distros: ${{ steps.set.outputs.distros }}
     steps:
@@ -14,7 +14,7 @@ jobs:
 
   build:
     needs: matrix
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 10
 
     strategy:
@@ -36,6 +36,9 @@ jobs:
         run: |
           xz -T0 -1 -c image/output/ps5-${{ matrix.distro }}.img \
             > image/output/ps5-${{ matrix.distro }}.img.xz
+
+      - name: Install rclone
+        run: sudo apt-get update && sudo apt-get install -y rclone
 
       - name: Upload to R2
         env:
@@ -71,7 +74,7 @@ jobs:
 
   release:
     needs: build
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: Download build metadata
         uses: actions/download-artifact@v6
@@ -121,9 +124,12 @@ jobs:
 
   cleanup-remote:
     needs: release
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     if: always()
     steps:
+      - name: Install rclone
+        run: sudo apt-get update && sudo apt-get install -y rclone
+
       - name: Clean up R2 test files
         env:
           RCLONE_CONFIG_R2_TYPE: s3
