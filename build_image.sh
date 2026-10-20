@@ -26,6 +26,10 @@ usage() {
     echo "  --clean-only Remove all cached build artifacts and exit"
     echo "  --kernel-only  Build and package the kernel only, then exit"
     echo "  --patches-ref  Branch, tag, or commit SHA for patches (default: v1.2)"
+    echo ""
+    echo "Environment:"
+    echo "  PS5_VCN_FIRMWARE=navi10  Build in AMD's current Navi10 VCN firmware with the"
+    echo "                           PS5 patches instead of ps5-linux-patches' older one"
     exit 1
 }
 
@@ -307,6 +311,11 @@ else
             run_stage "Copy PS5 firmware into kernel tree" bash -c '
                 set -e
                 cp -r "'"$PATCHES_DIR"'/firmware" "'"$LINUX_TMP_DIR"'/ps5-firmware"
+                # Opt-in: newer Navi10 VCN firmware with the PS5 patches.
+                if [ "'"${PS5_VCN_FIRMWARE:-}"'" = navi10 ]; then
+                    "'"$SCRIPT_DIR"'/kernel-patches/ps5-vcn-navi10.sh" \
+                        "'"$LINUX_TMP_DIR"'/ps5-firmware/amdgpu/ps5_vcn.bin"
+                fi
                 cfg="'"$LINUX_TMP_DIR"'/.config"
                 # No sed -i: BSD sed (macOS hosts) takes a suffix argument.
                 sed "s|^CONFIG_EXTRA_FIRMWARE_DIR=.*|CONFIG_EXTRA_FIRMWARE_DIR=\"ps5-firmware\"|" "$cfg" > "$cfg.new"
