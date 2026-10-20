@@ -9,7 +9,9 @@ KERNEL_SRC=""
 CLEAN=false
 IMG_SIZE=12000
 KERNEL_ONLY=false
-PATCHES_REF="kernel-7.1.7-56922cf"
+# 753c793 (ps5-linux-patches main, 2026-10-09): Linux 7.2.3 with VCN 2.0
+# (hardware H.264/HEVC encode/decode). No kernel-7.2.x release exists yet.
+PATCHES_REF="753c7936dcb079bfeaaa0bb19dfc495744266500"
 
 MULTI_DISTROS="ubuntu2604 arch cachyos"
 
@@ -291,6 +293,17 @@ else
 
         run_stage "Copy kernel config" \
             cp "$PATCHES_DIR/.config" "$LINUX_TMP_DIR/.config"
+
+        # The patches' .config builds firmware into the kernel (VCN:
+        # amdgpu/ps5_vcn.bin) from ../ps5-linux-patches/firmware, a path
+        # the kernel-builder container (which only mounts the kernel tree
+        # at /src) cannot see. Ship the blobs inside the tree instead.
+        if [ -d "$PATCHES_DIR/firmware" ]; then
+            run_stage "Copy PS5 firmware into kernel tree" bash -c '
+                set -e
+                cp -r "'"$PATCHES_DIR"'/firmware" "'"$LINUX_TMP_DIR"'/ps5-firmware"
+                sed -i "s|^CONFIG_EXTRA_FIRMWARE_DIR=.*|CONFIG_EXTRA_FIRMWARE_DIR=\"ps5-firmware\"|" "'"$LINUX_TMP_DIR"'/.config"'
+        fi
 
         mv "$LINUX_TMP_DIR" "$LINUX_DEFAULT_DIR"
         KERNEL_SRC="$LINUX_DEFAULT_DIR"
