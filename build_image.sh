@@ -302,7 +302,11 @@ else
             run_stage "Copy PS5 firmware into kernel tree" bash -c '
                 set -e
                 cp -r "'"$PATCHES_DIR"'/firmware" "'"$LINUX_TMP_DIR"'/ps5-firmware"
-                sed -i "s|^CONFIG_EXTRA_FIRMWARE_DIR=.*|CONFIG_EXTRA_FIRMWARE_DIR=\"ps5-firmware\"|" "'"$LINUX_TMP_DIR"'/.config"'
+                cfg="'"$LINUX_TMP_DIR"'/.config"
+                # No sed -i: BSD sed (macOS hosts) takes a suffix argument.
+                sed "s|^CONFIG_EXTRA_FIRMWARE_DIR=.*|CONFIG_EXTRA_FIRMWARE_DIR=\"ps5-firmware\"|" "$cfg" > "$cfg.new"
+                mv "$cfg.new" "$cfg"
+                grep -q "^CONFIG_EXTRA_FIRMWARE_DIR=\"ps5-firmware\"" "$cfg"'
         fi
 
         mv "$LINUX_TMP_DIR" "$LINUX_DEFAULT_DIR"
