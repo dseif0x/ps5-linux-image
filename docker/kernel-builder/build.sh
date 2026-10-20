@@ -61,9 +61,21 @@ rm -rf "$PS5_MW" "$NXP_MW"
 git clone "$MWIFIEX_REPO" "$PS5_MW"
 git -C "$PS5_MW" checkout "$MWIFIEX_REF" 2>/dev/null || true
 git clone --depth 1 --branch "$MWIFIEX_NXP_REF" "$MWIFIEX_NXP_REPO" "$NXP_MW"
-git -C "$NXP_MW" apply "$PS5_MW/ps5-iw620.patch"
-git -C "$NXP_MW" apply "$PS5_MW/ps5-iw620-cmd-timeout-recover.patch"
-git -C "$NXP_MW" apply "$PS5_MW/ps5-iw620-kernel71-compat.patch"
+# Same patch stack and order as ps5-linux-mwifiex's install.sh. The
+# kernel72 compat patch (strncpy -> strscpy, remain_on_channel's new
+# mac_addr argument) goes on top of kernel71 and only for 7.2+ kernels;
+# rtnl/he/tx are generated against the post-compat tree.
+mw_patches="ps5-iw620 ps5-iw620-cmd-timeout-recover ps5-iw620-kernel71-compat"
+KMAJ=${KVER%%.*}
+KMIN=${KVER#*.}; KMIN=${KMIN%%.*}
+if [ "$KMAJ" -gt 7 ] || { [ "$KMAJ" -eq 7 ] && [ "$KMIN" -ge 2 ]; }; then
+    mw_patches="$mw_patches ps5-iw620-kernel72-compat"
+fi
+mw_patches="$mw_patches ps5-iw620-rtnl-bounded-wait ps5-iw620-he ps5-iw620-tx-min128 ps5-iw620-tx-priority"
+for p in $mw_patches; do
+    echo "Applying $p.patch"
+    git -C "$NXP_MW" apply "$PS5_MW/$p.patch"
+done
 
 # Build against the kernel source we just built (out-of-tree build needs
 # the in-tree build dir, not just headers; same as install-extmod-build).
